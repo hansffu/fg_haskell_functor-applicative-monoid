@@ -1,0 +1,373 @@
+# -*- org-tree-slide-slide-in-effect: nil; display-line-numbers: nil; -*-
+#+title: Functors, Applicative Functors and Monoids
+
+* Functors
+Functors er ting som kan mappes over. ~Maybe~ og ~List~ er eksempler på functors.
+#+begin_src haskell
+fmap :: (a -> b) -> f a -> f b
+#+end_src
+
+Kan sees på som en boks som kan inneholde verdier, men noen functors kan bli litt for abstrakte. Så boken vil heller kalle det en ~computational context~
+
+** Type
+Functors har kind  ~* -> *~ og tar derfor en konkret type for å bli en konkret type
+#+begin_src haskell
+Maybe Int
+IO String
+IO ()
+#+end_src
+
+~Either~ tar to typer ~Either :: * -> * -> *~ og er i seg selv ikke en functor og må derfor defineres som
+#+begin_src haskell
+instance Functor (Either a) where
+#+end_src
+
+** IO Functor
+#+begin_src haskell
+instance Functor IO where
+    fmap f action = do
+        result <- action
+        return (f result)
+#+end_src
+~fmap~ kan brukes for å slippe å binde variabler
+#+begin_src haskell
+main = do line <- getLine
+          let line' = reverse line  
+          putStrLn $ "You said " ++ line' ++ " backwards!"  
+          putStrLn $ "Yes, you really said " ++ line' ++ " backwards!"
+#+end_src
+Kan skrives som
+#+begin_src haskell
+main = do line <- fmap reverse getLine
+          putStrLn $ "You said " ++ line ++ " backwards!"
+          putStrLn $ "Yes, you really said" ++ line ++ " backwards!"
+#+end_src
+
+** Å compose transformer-funksjonen er det samme som nested fmap
+#+begin_src haskell :tangle fmapping_io.hs
+import Data.Char
+import Data.List
+
+main = do line <- fmap (intersperse '-' . reverse . map toUpper) getLine
+          putStrLn line
+#+end_src
+
+#+begin_src shell :results output
+echo "hello there" | runhaskell fmapping_io.hs
+#+end_src
+
+** Funksjoner er functors
+- Med prefix notasjon blir ~r -> a~ til ~(->) r a~
+- Den kan derfor sees på som en type constructor med kind ~* -> * -> *~
+- Som med Either kan den partially applies
+#+begin_src haskell
+instance Functor ((->) r) where
+    fmap f g = (\x -> f (g x))
+#+end_src
+
+Med litt typemassasje
+#+begin_src haskell
+fmap :: (a -> b) -> f a -> f b
+# f = (->) r
+fmap :: (a -> b) -> ((->) r a) -> ((->) r b)
+fmap :: (a -> b) -> (r -> a) -> (r -> b)
+#+end_src
+
+Som er det samme som compose!
+#+begin_src haskell
+instance Functor ((->) r) where
+    fmap = (.)
+#+end_src
+
+#+begin_src haskell :results output :eval no
+ghci> :t fmap (*3) (+100)
+fmap (*3) (+100) :: (Num a) => a -> a
+ghci> fmap (*3) (+100) 1
+303
+ghci> (*3) `fmap` (+100) $ 1
+303
+ghci> (*3) . (+100) $ 1
+303
+ghci> fmap (show . (*3)) (*100) 1
+"300"
+#+end_src
+
+** Functor-lover
+- Alle functors må følge visse lover
+- Det gjør det lettere å lage generelle funksjoner for functors siden man vet akkurat hva de kan gjøre
+
+*** ~fmap id = id~
+Om vi mapper ~id~ over en functor skal vi få tilbake samme functor
+#+begin_src haskell
+ghci> fmap id (Just 3)
+Just 3
+ghci> id (Just 3)
+Just 3
+ghci> fmap id [1..5]
+[1,2,3,4,5]
+ghci> id [1..5]
+[1,2,3,4,5]
+ghci> fmap id []
+[]
+ghci> fmap id Nothing
+Nothing
+#+end_src
+*** ~fmap (f . g) = fmap f . fmap g~
+Å compose to funksjoner for så å mappe den over en functor er det samme som å mappe en funksjon over en functor for så å mappe den andre over resultatet
+Det vil si at det ikke er noen side effects, som intern state i functors som endrer seg. Se boka for eksempel
+
+* Applicative functors
+Utvider functor med en generell konstruktør og muligheten for at funksjonen vi mapper over en functor også er en functor
+#+begin_src haskell
+class (Functor f) => Applicative f where
+    pure :: a -> f a
+    (<*>) :: f (a -> b) -> f a -> f b
+#+end_src
+
+** ~pure~
+Wrapper en verdi i en functor
+#+begin_src haskell
+(pure 5) :: Maybe Int
+#+end_src
+
+** ~(<*>)~
+Som ~fmap~ men funksjonen vi sender inn kan også være en functor
+#+begin_src haskell
+(<*>) (Just (* 3)) (Just 2) -- => Just 6
+Just (* 3) <*> Just 2 -- => Just 6
+Nothing <*> Just 2 -- => Nothing
+#+end_src
+
+Nyttig når man ønsker å mappe flere parametere
+#+begin_src haskell
+fmap (*) (Just 3) <*> Just 2 -- => Just 6
+#+end_src
+
+** Maybe
+#+begin_src haskell
+instance Applicative Maybe where
+    pure = Just
+    Nothing <*> _ = Nothing
+    (Just f) <*> something = fmap f something
+#+end_src
+
+#+begin_src haskell
+Just (+3) <*> Just 9 -- => Just 12
+pure (+3) <*> Just 10 -- => Just 13
+pure (+3) <*> Just 9 -- => Just 12
+Just (++"hahah") <*> Nothing -- => Nothing
+Nothing <*> Just "woot" -- => Nothing
+
+pure (+) <*> Just 3 <*> Just 5 -- => Just 8
+pure (+) <*> Just 3 <*> Nothing -- => Nothing
+pure (+) <*> Nothing <*> Just 5 -- => Nothing
+#+end_src
+
+** ~(<$>)~
+Infiks versjon av ~fmap~
+#+begin_src haskell
+(<$>) :: (Functor f) => (a -> b) -> f a -> f b
+f <$> x = fmap f x
+#+end_src
+
+Så slipper vi noen tegn...
+#+begin_src haskell
+(+) <$> Just 3 <*> Just 5 -- => Just 8
+(+) <$> Just 3 <*> Nothing -- => Nothing
+(+) <$> Nothing <*> Just 5 -- => Nothing
+#+end_src
+
+** Lister
+#+begin_src haskell
+instance Applicative [] where
+    pure x = [x]
+    fs <*> xs = [f x | f <- fs, x <- xs]
+#+end_src
+
+#+begin_src haskell
+[(*0),(+100),(^2)] <*> [1,2,3] -- => [0,0,0,101,102,103,1,4,9]
+[(+),(*)] <*> [1,2] <*> [3,4] -- => [4,5,5,6,3,4,6,8]
+(++) <$> ["ha","heh","hmm"] <*> ["?","!","."] -- => ["ha?","ha!","ha.","heh?","heh!","heh.","hmm?","hmm!","hmm."]
+#+end_src
+
+Kan brukes som alternativ til list comprehensions
+#+begin_src haskell
+[ x*y | x <- [2,5,10], y <- [8,10,11]] -- => [16,20,22,40,50,55,80,100,110]
+(*) <$> [2,5,10] <*> [8,10,11] -- => [16,20,22,40,50,55,80,100,110]
+#+end_src
+
+** IO
+#+begin_src haskell
+instance Applicative IO where
+    pure = return
+  --(<*>) :: IO (a -> b) -> IO a -> IO b
+    a <*> b = do
+        f <- a
+        x <- b
+        return (f x)
+#+end_src
+
+Her kan det også forenkles
+#+begin_src haskell
+myAction :: IO String
+myAction = do
+    a <- getLine
+    b <- getLine
+    return $ a ++ b
+
+myAction2 :: IO String
+myAction2 = (++) <$> getLine <*> getLine
+#+end_src
+
+Siden resultatet er en IO kan det bindes og brukes videre
+#+begin_src haskell
+main = do
+    a <- (++) <$> getLine <*> getLine
+    putStrLn $ "The two lines concatenated turn out to be: " ++ a
+#+end_src
+
+** Funksjoner
+#+begin_src haskell
+instance Applicative ((->) r) where
+    pure x = (\_ -> x)
+    f <*> g = \x -> f x (g x)
+#+end_src
+- ~pure~ returnerer en funksjon som alltid returnerer ~x~
+- ~(<*>)~ Denne får vi prøve å finne ut av
+
+*** ~<*>~
+#+begin_src haskell
+f <*> g = \x -> f x (g x)
+#+end_src
+#+begin_src haskell
+:t (+) <$> (+3) <*> (*100) -- => (+) <$> (+3) <*> (*100) :: (Num a) => a -> a
+(+) <$> (+3) <*> (*100) $ 5 -- => 508
+#+end_src
+
+Her gjøres ~(+)~ på resultatet av de to functor/funksjonene når de blir eksekvert med siste argument (~x~)
+Så med litt substitusjon i lambdaen i ~f <*> g~
+#+begin_src haskell
+(((+) (+3)) 5) ((*100) 5)
+(+) ((+3) 5) ((*100) 5)
+#+end_src
+
+- Med IO eksempelet :: Gjør ~(++)~ på resultatet av ~getLine~ og ~getLine~
+- Med Function eksempel :: Gjør ~(+)~ på resultatet av ~f~ og ~g~
+Forskjellen er at med IO returnerer runtime resultatet, med med en fuksjon må vi applye den selv
+#+begin_src haskell
+(++) <$> getLine <*> getLine
+(+) <$> f <*> g
+#+end_src
+
+*** Fungerer også med flere ~<*>~
+#+begin_src haskell
+(\x y z -> [x,y,z]) <$> (+3) <*> (*2) <*> (/2) $ 5 -- => [8.0,10.0,2.5]
+#+end_src
+
+** ZipList er også en applicative functor
+#+begin_src haskell
+instance Applicative ZipList where
+        pure x = ZipList (repeat x)
+        ZipList fs <*> ZipList xs = ZipList (zipWith (\f x -> f x) fs xs)
+#+end_src
+
+Shorthand for zipWith
+#+begin_src haskell
+getZipList $ (+) <$> ZipList [1,2,3] <*> ZipList [100,100,100] -- => [101,102,103]
+getZipList $ (+) <$> ZipList [1,2,3] <*> ZipList [100,100..] -- => [101,102,103]
+getZipList $ max <$> ZipList [1,2,3,4,5,3] <*> ZipList [5,3,1,2] -- => [5,3,3,4]
+getZipList $ (,,) <$> ZipList "dog" <*> ZipList "cat" <*> ZipList "rat" -- => [('d','c','r'),('o','a','a'),('g','t','t')]
+#+end_src
+
+** ~liftA2~
+Bare en shorthand med fint navn
+#+begin_src haskell
+liftA2 :: (Applicative f) => (a -> b -> c) -> f a -> f b -> f c
+liftA2 f a b = f <$> a <*> b
+#+end_src
+
+** Applicative-lover
+#+begin_src haskell
+pure f <*> x = fmap f x
+pure id <*> v = v
+pure (.) <*> u <*> v <*> w = u <*> (v <*> w)
+pure f <*> pure x = pure (f x)
+u <*> pure y = pure ($ y) <*> u
+#+end_src
+
+* newtype
+For å wrappe en eksisterende type inn i en ny type
+#+begin_src haskell
+newtype ZipList a = ZipList { getZipList :: [a] }
+#+end_src
+Kan kun ha èn konstruktør og èn verdi. Ellers må man bruke ~data~
+#+begin_src haskell
+data Profession = Fighter | Archer | Accountant
+
+data Race = Human | Elf | Orc | Goblin
+
+data PlayerCharacter = PlayerCharacter Race Profession
+#+end_src
+
+** Deriving
+Typen som wrappes må ha de typeklassene som derives
+#+begin_src haskell
+newtype CharList = CharList { getCharList :: [Char] } deriving (Eq, Show)
+
+CharList "this will be shown!"  -- => CharList {getCharList = "this will be shown!"}
+CharList "benny" == CharList "benny"  -- => True
+CharList "benny" == CharList "oisters"  -- => False
+#+end_src
+
+* Monoid
+#+begin_src haskell
+class Monoid m where
+    mempty :: m
+    mappend :: m -> m -> m
+    mconcat :: [m] -> m
+    mconcat = foldr mappend mempty
+#+end_src
+
+** Monoid-lover
+#+begin_src haskell
+mempty `mappend` x = x
+x `mappend` mempty = x
+(x `mappend` y) `mappend` z = x `mappend` (y `mappend` z)
+#+end_src
+
+** Liste
+#+begin_src haskell
+instance Monoid [a] where
+    mempty = []
+    mappend = (++)
+#+end_src
+
+** Tall
+Her er det flere muligheter
+*** Product
+#+begin_src haskell
+newtype Product a =  Product { getProduct :: a } deriving (Eq, Ord, Read, Show, Bounded)
+instance Num a => Monoid (Product a) where
+    mempty = Product 1
+    Product x `mappend` Product y = Product (x * y)
+#+end_src
+*** Sum
+#+begin_src haskell
+newtype Sum a =  Sum { getSum :: a } deriving (Eq, Ord, Read, Show, Bounded)
+instance Num a => Monoid (Sum a) where
+    mempty = Sum 0
+    Sum x `mappend` Sum y = Sum (x + y)
+#+end_src
+
+** Boolean
+#+begin_src haskell
+newtype Any = Any { getAny :: Bool } deriving (Eq, Ord, Read, Show, Bounded)
+instance Monoid Any where
+        mempty = Any False
+        Any x `mappend` Any y = Any (x || y)
+
+newtype All = All { getAll :: Bool } deriving (Eq, Ord, Read, Show, Bounded)
+instance Monoid All where
+        mempty = All True
+        All x `mappend` All y = All (x && y)
+#+end_src
